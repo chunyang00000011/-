@@ -87,7 +87,6 @@ Mouse click-to-step can remain as a prototype helper, but the formal design uses
 | Stat | Range | Initial | Role |
 | --- | --- | --- | --- |
 | Hunger | `0~100` | `60` | Fuel for flight. Reaching `0` triggers collapse/fall logic. |
-| Weight | `80g~200g` | `120g` | Increases after eating and raises energy cost. Slowly decays over time. |
 | Height | `0m~100m` | `50m` | Determines routes, collision bands, wind, resources, and predator risk. |
 | Feather Wetness | `0~100` | `0` | Increases in rain and raises energy cost. |
 | Distance | `0m+` | `0m` | Main score and difficulty driver. |
@@ -102,7 +101,6 @@ final_consumption_per_0_5s =
 base_consumption
 * wind_multiplier
 * wetness_multiplier
-* weight_multiplier
 * height_multiplier
 * speed_multiplier
 + operation_extra_cost
@@ -128,24 +126,10 @@ base_consumption
 | Wetness | Damp `21~50` | `x1.2` |
 | Wetness | Wet `51~80` | `x1.5` |
 | Wetness | Soaked `81~100` | `x2.0` |
-| Weight | `<=120g` | `x1.0` |
-| Weight | `121~150g` | `x1.1` |
-| Weight | `151~180g` | `x1.3` |
-| Weight | `181~200g` | `x1.5` |
 | Height | `0~60m` | `x1.0` |
 | Height | `61~100m` | `x0.8` |
 | Speed | Normal | `x1.0` |
 | Speed | Accelerating | `x1.4` |
-
-### 5.3 Weight Decay
-
-Weight should not only increase. This keeps food rewarding instead of becoming a permanent penalty.
-
-| Rule | Value |
-| --- | --- |
-| Natural decay | `-1g every 12s` while weight > `120g` |
-| Heavy decay bonus | If weight > `160g`, decay becomes `-1g every 8s` |
-| Minimum natural weight | `120g` |
 
 ## 6. Height Bands And Route Choice
 
@@ -159,14 +143,14 @@ Weight should not only increase. This keeps food rewarding instead of becoming a
 
 Food is collected by collision. No click interaction is required.
 
-| Food Type | Height Range | Hunger | Weight | Risk / Note |
-| --- | --- | --- | --- | --- |
-| Ground insects / seeds | `0~15m` | `+8` | `+1g` | Requires flying close to ground |
-| Ground bait | `0~10m` | `+15` | `+3g` | 60% chance to trigger trap |
-| Bush berries | `15~35m` | `+10` | `+2g` | May be inside passable bush |
-| Canopy larvae / fruit | `35~70m` | `+12` | `+2g` | Requires canopy-height flight |
-| Night warm-light insects | `70~90m` | `+5` | `+0g` | Only during night |
-| Lake flying insects | `20~50m` | `+5` | `+1g` | Only during lake segments |
+| Food Type | Height Range | Hunger | Risk / Note |
+| --- | --- | --- | --- |
+| Ground insects / seeds | `0~15m` | `+8` | Requires flying close to ground |
+| Ground bait | `0~10m` | `+15` | 60% chance to trigger trap |
+| Bush berries | `15~35m` | `+10` | May be inside passable bush |
+| Canopy larvae / fruit | `35~70m` | `+12` | Requires canopy-height flight |
+| Night warm-light insects | `70~90m` | `+5` | Only during night |
+| Lake flying insects | `20~50m` | `+5` | Only during lake segments |
 
 ### 7.1 Food Generation
 
@@ -377,7 +361,7 @@ To prevent unfair overlaps, use an event director instead of letting every syste
 - Height bands
 - Food type distribution
 - Trees and bushes
-- Weight and unified hunger formula
+- Unified hunger formula
 - Basic difficulty scaling
 
 ### V0.3 Atmosphere And Risk
@@ -421,4 +405,3 @@ To prevent unfair overlaps, use an event director instead of letting every syste
 - Keyboard and touch controls documented
 - Export presets committed if stable
 - Team workflow documented in Git
-

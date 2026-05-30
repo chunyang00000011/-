@@ -164,7 +164,6 @@ Most weather can be implemented with particles, shaders, and tint overlays rathe
 | --- | --- | --- |
 | Hunger bar | High | Main survival stat |
 | Wetness meter | Medium | Important once rain exists |
-| Weight indicator | Medium | Small numeric or icon meter |
 | Height meter | High | Shows `0~100m` with band markers |
 | Distance counter | High | Main score |
 | Wind indicator | Medium | Tailwind/headwind icon |
@@ -263,4 +262,3 @@ Recommended Godot import settings:
 - Use lossless or high-quality compression for small sprites.
 - Use texture filtering based on art style. For watercolor/painted art, linear filtering is acceptable.
 - Keep `.import` files committed so teammates get consistent imports.
-

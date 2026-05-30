@@ -1,15 +1,27 @@
-[gd_scene load_steps=2 format=3 uid="uid://birdflightmain"]
+[gd_scene load_steps=6 format=3 uid="uid://birdflightmain"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/scrolling_world.gd" id="2_world"]
+[ext_resource type="Script" path="res://scripts/player_bird.gd" id="3_player"]
+[ext_resource type="Script" path="res://scripts/spawner.gd" id="4_spawner"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="5_hud"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
 
-[node name="BackgroundA" type="Sprite2D" parent="."]
-z_index = -10
+[node name="World" type="Node2D" parent="."]
+script = ExtResource("2_world")
 
-[node name="BackgroundB" type="Sprite2D" parent="."]
-z_index = -10
+[node name="Spawner" type="Node2D" parent="."]
+z_index = 5
+script = ExtResource("4_spawner")
 
-[node name="Bird" type="AnimatedSprite2D" parent="."]
-z_index = 10
+[node name="Player" type="Area2D" parent="."]
+z_index = 20
+script = ExtResource("3_player")
+
+[node name="Sprite" type="AnimatedSprite2D" parent="Player"]
+
+[node name="HUD" type="CanvasLayer" parent="."]
+layer = 10
+script = ExtResource("5_hud")

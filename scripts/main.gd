@@ -1,134 +1,118 @@
 extends Node2D
 
-const VIEWPORT_SIZE: Vector2 = Vector2(1280.0, 720.0)
-const BACKGROUND_TEXTURE: Texture2D = preload("res://assets/backgrounds/background_1.png")
-const BIRD_FRAME_DIR: String = "res://assets/bird/flying"
+const INITIAL_HUNGER: float = 60.0
+const MAX_HUNGER: float = 100.0
+const NORMAL_SCROLL_SPEED: float = 150.0
+const ACCEL_SCROLL_SPEED: float = 270.0
+const DISTANCE_PIXELS_PER_METER: float = 10.0
 
-@export var background_speed: float = 180.0
-@export var bird_step: float = 92.0
-@export var bird_move_speed: float = 7.5
-@export var bird_animation_fps: float = 14.0
+@onready var world: HomewardScrollingWorld = $World
+@onready var player: HomewardPlayerBird = $Player
+@onready var spawner: HomewardSpawner = $Spawner
+@onready var hud: HomewardHUD = $HUD
 
-@onready var background_a: Sprite2D = $BackgroundA
-@onready var background_b: Sprite2D = $BackgroundB
-@onready var bird: AnimatedSprite2D = $Bird
-
-var _background_width: float = 0.0
-var _bird_target_y: float = 0.0
-var _bird_min_y: float = 95.0
-var _bird_max_y: float = 625.0
+var running: bool = true
+var hunger: float = INITIAL_HUNGER
+var distance_m: float = 0.0
+var flight_time: float = 0.0
+var _hunger_tick_timer: float = 0.0
+var _hit_pause_timer: float = 0.0
 
 
 func _ready() -> void:
-	get_viewport().size_changed.connect(_layout)
-	_setup_background()
-	_setup_bird_animation()
-	_layout()
+	spawner.food_collected.connect(_on_food_collected)
+	spawner.obstacle_hit.connect(_on_obstacle_hit)
+	_reset_run()
 
 
 func _process(delta: float) -> void:
-	_scroll_background(delta)
-	bird.position.y = lerp(bird.position.y, _bird_target_y, 1.0 - exp(-bird_move_speed * delta))
-
-
-func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("bird_up"):
-		_nudge_bird(-bird_step)
-	elif event.is_action_pressed("bird_down"):
-		_nudge_bird(bird_step)
-	else:
-		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
-		if mouse_event == null or not mouse_event.pressed:
-			return
-		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
-			var direction: float = -1.0 if mouse_event.position.y < bird.global_position.y else 1.0
-			_nudge_bird(direction * bird_step)
-		elif mouse_event.button_index == MOUSE_BUTTON_RIGHT:
-			_nudge_bird(bird_step)
-
-
-func _setup_background() -> void:
-	background_a.texture = BACKGROUND_TEXTURE
-	background_b.texture = BACKGROUND_TEXTURE
-	_background_width = float(BACKGROUND_TEXTURE.get_width())
-	background_a.centered = false
-	background_b.centered = false
-
-
-func _setup_bird_animation() -> void:
-	var frames: SpriteFrames = SpriteFrames.new()
-	frames.add_animation("fly")
-	frames.set_animation_loop("fly", true)
-	frames.set_animation_speed("fly", bird_animation_fps)
-
-	var frame_files: Array[String] = _get_png_files(BIRD_FRAME_DIR)
-	if frame_files.is_empty():
-		push_error("No bird animation frames found in: %s" % BIRD_FRAME_DIR)
+	if Input.is_action_just_pressed("restart_run"):
+		_reset_run()
 		return
 
-	for frame_path in frame_files:
-		var frame_texture: Texture2D = load(frame_path) as Texture2D
-		if frame_texture != null:
-			frames.add_frame("fly", frame_texture)
+	if not running:
+		hud.update_stats(hunger, player.height_m, distance_m, flight_time)
+		return
 
-	bird.sprite_frames = frames
-	bird.animation = "fly"
-	bird.play()
-	bird.flip_h = true
-	bird.scale = Vector2(1.05, 1.05)
+	flight_time += delta
+	_hit_pause_timer = maxf(0.0, _hit_pause_timer - delta)
 
+	var scroll_speed: float = _current_scroll_speed()
+	world.set_scroll_speed(scroll_speed)
+	world.set_height_ratio(player.height_m / 100.0)
+	spawner.scroll_speed = scroll_speed
 
-func _get_png_files(path: String) -> Array[String]:
-	var files: Array[String] = []
-	var dir: DirAccess = DirAccess.open(path)
-	if dir == null:
-		push_error("Cannot open bird frame directory: %s" % path)
-		return files
+	distance_m += scroll_speed * delta / DISTANCE_PIXELS_PER_METER
+	_consume_hunger(delta)
+	hud.update_stats(hunger, player.height_m, distance_m, flight_time)
 
-	dir.list_dir_begin()
-	var file_name: String = dir.get_next()
-	while file_name != "":
-		if not dir.current_is_dir() and file_name.get_extension().to_lower() == "png":
-			files.append(path.path_join(file_name))
-		file_name = dir.get_next()
-	dir.list_dir_end()
-	files.sort()
-	return files
+	if hunger <= 0.0:
+		_game_over()
 
 
-func _layout() -> void:
-	var viewport_size: Vector2 = Vector2(get_viewport_rect().size)
-	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
-		viewport_size = VIEWPORT_SIZE
+func _reset_run() -> void:
+	running = true
+	hunger = INITIAL_HUNGER
+	distance_m = 0.0
+	flight_time = 0.0
+	_hunger_tick_timer = 0.0
+	_hit_pause_timer = 0.0
 
-	var bg_scale: float = max(viewport_size.x / float(BACKGROUND_TEXTURE.get_width()), viewport_size.y / float(BACKGROUND_TEXTURE.get_height()))
-	var scaled_height: float = float(BACKGROUND_TEXTURE.get_height()) * bg_scale
-	_background_width = float(BACKGROUND_TEXTURE.get_width()) * bg_scale
-
-	for background in [background_a, background_b]:
-		background.scale = Vector2(bg_scale, bg_scale)
-		background.position.y = (viewport_size.y - scaled_height) * 0.5
-
-	background_a.position.x = 0.0
-	background_b.position.x = _background_width
-
-	bird.position.x = viewport_size.x * 0.43
-	_bird_min_y = viewport_size.y * 0.18
-	_bird_max_y = viewport_size.y * 0.82
-	_bird_target_y = clamp(_bird_target_y if _bird_target_y > 0.0 else viewport_size.y * 0.5, _bird_min_y, _bird_max_y)
-	bird.position.y = clamp(bird.position.y if bird.position.y > 0.0 else _bird_target_y, _bird_min_y, _bird_max_y)
+	player.reset()
+	player.set_running(true)
+	world.reset()
+	world.set_scroll_speed(NORMAL_SCROLL_SPEED)
+	spawner.reset()
+	spawner.set_running(true)
+	hud.hide_game_over()
+	hud.update_stats(hunger, player.height_m, distance_m, flight_time)
 
 
-func _scroll_background(delta: float) -> void:
-	var movement: float = background_speed * delta
-	background_a.position.x -= movement
-	background_b.position.x -= movement
-
-	if background_a.position.x <= -_background_width:
-		background_a.position.x = background_b.position.x + _background_width
-	if background_b.position.x <= -_background_width:
-		background_b.position.x = background_a.position.x + _background_width
+func _current_scroll_speed() -> float:
+	if _hit_pause_timer > 0.0:
+		return 0.0
+	if player.is_accelerating:
+		return ACCEL_SCROLL_SPEED
+	return NORMAL_SCROLL_SPEED
 
 
-func _nudge_bird(amount: float) -> void:
-	_bird_target_y = clamp(_bird_target_y + amount, _bird_min_y, _bird_max_y)
+func _consume_hunger(delta: float) -> void:
+	_hunger_tick_timer += delta
+
+	while _hunger_tick_timer >= 0.5 and running:
+		_hunger_tick_timer -= 0.5
+		var cost: float = 1.0
+		if player.is_climbing:
+			cost += 0.5
+		if player.is_descending:
+			cost += 0.2
+		if player.is_accelerating:
+			cost += 0.7
+		hunger = maxf(0.0, hunger - cost)
+
+
+func _on_food_collected(hunger_gain: float) -> void:
+	if not running:
+		return
+	hunger = minf(MAX_HUNGER, hunger + hunger_gain)
+	hud.update_stats(hunger, player.height_m, distance_m, flight_time)
+
+
+func _on_obstacle_hit(hunger_loss: float) -> void:
+	if not running:
+		return
+	hunger = maxf(0.0, hunger - hunger_loss)
+	_hit_pause_timer = 0.18
+	if player.has_method("flash_damage"):
+		player.flash_damage()
+	hud.update_stats(hunger, player.height_m, distance_m, flight_time)
+	if hunger <= 0.0:
+		_game_over()
+
+
+func _game_over() -> void:
+	running = false
+	world.set_scroll_speed(0.0)
+	spawner.set_running(false)
+	player.set_running(false)
+	hud.show_game_over(distance_m, flight_time)
