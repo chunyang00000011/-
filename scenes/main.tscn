@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://birdflightmain"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="BackgroundA" type="Sprite2D" parent="."]
+z_index = -10
+
+[node name="BackgroundB" type="Sprite2D" parent="."]
+z_index = -10
+
+[node name="Bird" type="AnimatedSprite2D" parent="."]
+z_index = 10
