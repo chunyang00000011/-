@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dirfx143r5pxf"
-path="res://.godot/imported/weather_rain_cloud_warning_001.png-ec76cc3422216433e1ce69ec0ccf53d0.ctex"
+uid="uid://1t48exjpql91q"
+path="res://.godot/imported/food_canopy_fruit_cluster_v01.png-1509340d011a0891082aa3d56a332501.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/environment/overlays/weather_rain_cloud_warning_001.png"
-dest_files=["res://.godot/imported/weather_rain_cloud_warning_001.png-ec76cc3422216433e1ce69ec0ccf53d0.ctex"]
+source_file="res://assets/items/food/food_canopy_fruit_cluster_v01.png"
+dest_files=["res://.godot/imported/food_canopy_fruit_cluster_v01.png-1509340d011a0891082aa3d56a332501.ctex"]
 
 [params]
 
