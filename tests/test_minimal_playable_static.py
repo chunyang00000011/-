@@ -29,7 +29,7 @@ class MinimalPlayableStaticTest(unittest.TestCase):
     def test_main_scene_wires_modular_runtime_nodes(self):
         scene = read("scenes/main.tscn")
 
-        for node_name in ["World", "Player", "Spawner", "HUD"]:
+        for node_name in ["World", "Player", "Spawner", "HUD", "Intro"]:
             self.assertIn(f'name="{node_name}"', scene)
 
         for script_path in [
@@ -38,8 +38,53 @@ class MinimalPlayableStaticTest(unittest.TestCase):
             "res://scripts/player_bird.gd",
             "res://scripts/spawner.gd",
             "res://scripts/hud.gd",
+            "res://scripts/intro_screen.gd",
         ]:
             self.assertIn(script_path, scene)
+
+    def test_intro_assets_and_flow_are_wired_before_gameplay(self):
+        scene = read("scenes/main.tscn")
+        main = read("scripts/main.gd")
+        intro = read("scripts/intro_screen.gd")
+
+        for asset_path in [
+            "assets/intro/homeward_intro.mp4",
+            "assets/intro/homeward_intro.ogv",
+            "assets/intro/homeward_title.png",
+        ]:
+            self.assertTrue((ROOT / asset_path).exists(), f"missing {asset_path}")
+
+        for snippet in [
+            "VideoStreamPlayer",
+            "TextureRect",
+            "ClickPrompt",
+            "res://assets/intro/homeward_intro.mp4",
+            "res://assets/intro/homeward_intro.ogv",
+            "res://assets/intro/homeward_title.png",
+        ]:
+            self.assertIn(snippet, scene)
+
+        for snippet in [
+            "signal start_requested",
+            "func begin",
+            "_on_video_finished",
+            "show_title",
+            "点击屏幕开始你的归途",
+            "InputEventMouseButton",
+            "InputEventScreenTouch",
+        ]:
+            self.assertIn(snippet, intro)
+
+        for snippet in [
+            "var _intro_active: bool = true",
+            "intro.start_requested.connect(_on_intro_start_requested)",
+            "_set_gameplay_active(false)",
+            "_on_intro_start_requested",
+            "player.set_running(value)",
+            "spawner.set_running(value)",
+            "hud.visible = value",
+        ]:
+            self.assertIn(snippet, main)
 
     def test_project_input_actions_support_continuous_flight_acceleration_and_restart(self):
         project = read("project.godot")

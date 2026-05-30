@@ -1,10 +1,13 @@
-[gd_scene load_steps=6 format=3 uid="uid://birdflightmain"]
+[gd_scene load_steps=9 format=3 uid="uid://birdflightmain"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/scrolling_world.gd" id="2_world"]
 [ext_resource type="Script" path="res://scripts/player_bird.gd" id="3_player"]
 [ext_resource type="Script" path="res://scripts/spawner.gd" id="4_spawner"]
 [ext_resource type="Script" path="res://scripts/hud.gd" id="5_hud"]
+[ext_resource type="Script" path="res://scripts/intro_screen.gd" id="6_intro"]
+[ext_resource type="Texture2D" path="res://assets/intro/homeward_title.png" id="7_title"]
+[ext_resource type="VideoStream" path="res://assets/intro/homeward_intro.ogv" id="8_intro_video"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -25,3 +28,61 @@ script = ExtResource("3_player")
 [node name="HUD" type="CanvasLayer" parent="."]
 layer = 10
 script = ExtResource("5_hud")
+
+[node name="Intro" type="CanvasLayer" parent="."]
+layer = 100
+script = ExtResource("6_intro")
+metadata/original_video_path = "res://assets/intro/homeward_intro.mp4"
+
+[node name="IntroRoot" type="Control" parent="Intro"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VideoPlayer" type="VideoStreamPlayer" parent="Intro/IntroRoot"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stream = ExtResource("8_intro_video")
+expand = true
+
+[node name="TitleImage" type="TextureRect" parent="Intro/IntroRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("7_title")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="ClickPrompt" type="Label" parent="Intro/IntroRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = 214.0
+offset_right = 260.0
+offset_bottom = 264.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 32
+theme_override_colors/font_color = Color(1, 0.96, 0.84, 1)
+theme_override_colors/font_shadow_color = Color(0.02, 0.035, 0.05, 0.85)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+text = "点击屏幕开始你的归途"
+horizontal_alignment = 1
+vertical_alignment = 1
