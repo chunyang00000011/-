@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cmsf8cnrrlymm"
-path="res://.godot/imported/bg_mid_trees_hills_day_001.png-7078f607db5a7f4e7cf035093a5b4db8.ctex"
+uid="uid://dmbb0regn2olg"
+path="res://.godot/imported/overlay_stars_distant_lights_001.png-f1827ce713a4050c92f7bbbd2461b585.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/environment/backgrounds/bg_mid_trees_hills_day_001.png"
-dest_files=["res://.godot/imported/bg_mid_trees_hills_day_001.png-7078f607db5a7f4e7cf035093a5b4db8.ctex"]
+source_file="res://assets/art/environment/overlays/overlay_stars_distant_lights_001.png"
+dest_files=["res://.godot/imported/overlay_stars_distant_lights_001.png-f1827ce713a4050c92f7bbbd2461b585.ctex"]
 
 [params]
 

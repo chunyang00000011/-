@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ckbfrsiymb14d"
-path="res://.godot/imported/bg_foreground_grass_day_001.png-823e05166bee4899d631104a85279c23.ctex"
+uid="uid://cebithkb1pbr6"
+path="res://.godot/imported/obstacle_tree_wind_001.png-86c827602fa50e56082f7ccda893ed18.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/environment/backgrounds/bg_foreground_grass_day_001.png"
-dest_files=["res://.godot/imported/bg_foreground_grass_day_001.png-823e05166bee4899d631104a85279c23.ctex"]
+source_file="res://assets/art/environment/obstacles/obstacle_tree_wind_001.png"
+dest_files=["res://.godot/imported/obstacle_tree_wind_001.png-86c827602fa50e56082f7ccda893ed18.ctex"]
 
 [params]
 

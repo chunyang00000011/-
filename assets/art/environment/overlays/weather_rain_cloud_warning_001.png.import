@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://712f8ffm4ehr"
-path="res://.godot/imported/bg_far_sky_day_001.png-6ad341dfc5b06b1888100ac601ef5415.ctex"
+uid="uid://dirfx143r5pxf"
+path="res://.godot/imported/weather_rain_cloud_warning_001.png-ec76cc3422216433e1ce69ec0ccf53d0.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/environment/backgrounds/bg_far_sky_day_001.png"
-dest_files=["res://.godot/imported/bg_far_sky_day_001.png-6ad341dfc5b06b1888100ac601ef5415.ctex"]
+source_file="res://assets/art/environment/overlays/weather_rain_cloud_warning_001.png"
+dest_files=["res://.godot/imported/weather_rain_cloud_warning_001.png-ec76cc3422216433e1ce69ec0ccf53d0.ctex"]
 
 [params]
 

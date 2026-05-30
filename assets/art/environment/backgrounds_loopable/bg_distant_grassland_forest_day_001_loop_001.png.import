@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bphol0ge55on2"
-path="res://.godot/imported/bg_ground_strip_day_001.png-5c0efdd5ec9f7f44dd856ec3fc1c0de3.ctex"
+uid="uid://b1x682mcljy0o"
+path="res://.godot/imported/bg_distant_grassland_forest_day_001_loop_001.png-96b34f343f2d318182e8cd3fa48effce.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/environment/backgrounds/bg_ground_strip_day_001.png"
-dest_files=["res://.godot/imported/bg_ground_strip_day_001.png-5c0efdd5ec9f7f44dd856ec3fc1c0de3.ctex"]
+source_file="res://assets/art/environment/backgrounds_loopable/bg_distant_grassland_forest_day_001_loop_001.png"
+dest_files=["res://.godot/imported/bg_distant_grassland_forest_day_001_loop_001.png-96b34f343f2d318182e8cd3fa48effce.ctex"]
 
 [params]
 
