@@ -1,10 +1,11 @@
 extends Area2D
 class_name HomewardObstacle
 
-signal hit(hunger_loss: float)
+signal hit(hunger_loss: float, obstacle_kind: String, world_pos: Vector2)
 
 @export var hunger_loss: float = 5.0
 @export var collision_size: Vector2 = Vector2(170.0, 120.0)
+@export var obstacle_kind: String = "tree"
 
 var scroll_speed: float = 150.0
 var _has_hit: bool = false
@@ -29,10 +30,11 @@ func _process(delta: float) -> void:
 		queue_free()
 
 
-func setup(spawn_position: Vector2, texture: Texture2D, visual_scale: float, loss: float, hitbox_size: Vector2) -> void:
+func setup(spawn_position: Vector2, texture: Texture2D, visual_scale: float, loss: float, hitbox_size: Vector2, kind: String = "tree") -> void:
 	position = spawn_position
 	hunger_loss = loss
 	collision_size = hitbox_size
+	obstacle_kind = kind
 	_setup_sprite(texture, visual_scale)
 	_setup_collision()
 
@@ -68,4 +70,4 @@ func _on_area_entered(area: Area2D) -> void:
 		return
 
 	_has_hit = true
-	hit.emit(hunger_loss)
+	hit.emit(hunger_loss, obstacle_kind, global_position)

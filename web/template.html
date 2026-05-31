@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>归途 Homeward · 轻量版</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #0d1014; color: #eee;
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+    -webkit-user-select: none; user-select: none; touch-action: none;
+  }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #game { display: block; background: #87b9d4; box-shadow: 0 0 40px rgba(0,0,0,0.6); }
+  #loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; background: #0d1014; z-index: 50;
+  }
+  #loading h1 { font-size: 30px; letter-spacing: 8px; font-weight: 600; }
+  #loading p { color: #8aa; font-size: 13px; letter-spacing: 2px; }
+  .bar { width: 220px; height: 4px; background: #243; border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: #6db; transition: width .15s; }
+  #hint { position: fixed; bottom: 8px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.45); font-size: 11px; letter-spacing: 1px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="1280" height="720"></canvas></div>
+<div id="loading"><h1>归 途</h1><p>HOMEWARD · 轻量版</p><div class="bar"><i id="barfill"></i></div></div>
+<div id="hint">W/↑ 上升　S/↓ 下降　空格 加速　F 振翅惊吓　R 重开　Esc 暂停</div>
+
+<script>
+/* ===== 内嵌资源（由 build.py 注入）===== */
+const ASSETS = __ASSETS__;
+</script>
+
+<script>
+"use strict";
+(function () {
+const VIEW_W = 1280, VIEW_H = 720;
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const rand = (a, b) => a + Math.random() * (b - a);
+const now = () => performance.now() / 1000;
+// 原始尺寸：精灵显示缩放须基于原图尺寸，与打包压缩后的实际像素无关，
+// 否则不同压缩档的精灵（如飞行帧 vs 状态图）会出现突然变大/变小。
+const owOf = (img) => (img && img._ow) || (img && img.width) || 1;
+const ohOf = (img) => (img && img._oh) || (img && img.height) || 1;
+
+/* ---------- 资源加载：base64 -> Image / Audio ---------- */
+const IMG = {}, SND = {};
+function loadAssets(onProgress) {
+  const imgKeys = Object.keys(ASSETS.images || {});
+  const sndKeys = Object.keys(ASSETS.audio || {});
+  const total = imgKeys.length + sndKeys.length;
+  let done = 0;
+  return new Promise((resolve) => {
+    const step = () => { done++; if (onProgress) onProgress(done / total); if (done >= total) resolve(); };
+    if (total === 0) { resolve(); return; }
+    imgKeys.forEach(k => {
+      const im = new Image();
+      im.onload = step; im.onerror = step;
+      const entry = ASSETS.images[k];
+      // 精灵为 {s,w,h}（s=数据URL, w/h=原始尺寸）；场景为纯字符串。
+      if (typeof entry === "string") {
+        im.src = entry;
+      } else {
+        im._ow = entry.w; im._oh = entry.h;  // 原始尺寸：显示缩放基于此，与压缩后像素无关
+        im.src = entry.s;
+      }
+      IMG[k] = im;
+    });
+    sndKeys.forEach(k => {
+      const a = new Audio();
+      a.preload = "auto";
+      a.oncanplaythrough = function once() { a.oncanplaythrough = null; step(); };
+      a.onerror = step;
+      a.src = ASSETS.audio[k];
+      SND[k] = a;
+      // 某些浏览器不触发 canplaythrough，加超时兜底
+      setTimeout(() => { if (a.oncanplaythrough) { a.oncanplaythrough = null; step(); } }, 4000);
+    });
+  });
+}
+
+/* ---------- 音频管理：模拟 audio_manager.gd ---------- */
+const Audio_ = {
+  musicVol: 0.6, sfxVol: 0.8, music: null, _started: false,
+  playMusic() {
+    if (!SND.bgm) return;
+    this.music = SND.bgm; this.music.loop = true; this.music.volume = this.musicVol;
+    const p = this.music.play(); if (p) p.catch(() => {});
+  },
+  stopMusic() { if (this.music) { this.music.pause(); this.music.currentTime = 0; } },
+  play(key) {
+    const base = SND[key]; if (!base) return;
+    try { const a = base.cloneNode(); a.volume = this.sfxVol; const p = a.play(); if (p) p.catch(() => {}); } catch (e) {}
+  },
+  playFood(foodId) {
+    const k = "food_" + foodId;
+    if (SND[k]) this.play(k); else this.play("food_generic");
+  },
+  setMusicVol(v) { this.musicVol = clamp(v, 0, 1); if (this.music) this.music.volume = this.musicVol; },
+  setSfxVol(v) { this.sfxVol = clamp(v, 0, 1); },
+};
+
+/* ---------- 存档：localStorage（模拟 save_data.gd）---------- */
+const Save = {
+  key: "homeward_lite_save",
+  data: { best: 0, stats: {}, unlocked: {} },
+  load() { try { const s = localStorage.getItem(this.key); if (s) this.data = Object.assign(this.data, JSON.parse(s)); } catch (e) {} },
+  flush() { try { localStorage.setItem(this.key, JSON.stringify(this.data)); } catch (e) {} },
+  best() { return this.data.best || 0; },
+  updateBest(d) { if (d > (this.data.best || 0)) this.data.best = d; },
+  stat(k) { return this.data.stats[k] || 0; },
+  addStat(k, n) { this.data.stats[k] = (this.data.stats[k] || 0) + n; },
+  isUnlocked(id) { return !!this.data.unlocked[id]; },
+  unlock(id) { if (this.data.unlocked[id]) return false; this.data.unlocked[id] = true; this.flush(); return true; },
+};
+
+/* ---------- 输入 ---------- */
+const Keys = {};
+const Pressed = {};
+const justPressed = {};
+function keyAction(e) {
+  const c = e.code;
+  if (c === "KeyW" || c === "ArrowUp") return "up";
+  if (c === "KeyS" || c === "ArrowDown") return "down";
+  if (c === "Space") return "accel";
+  if (c === "KeyF") return "flap";
+  if (c === "KeyR") return "restart";
+  if (c === "Escape") return "pause";
+  return null;
+}
+window.addEventListener("keydown", e => {
+  const a = keyAction(e); if (!a) return;
+  e.preventDefault();
+  if (!Keys[a]) justPressed[a] = true;
+  Keys[a] = true;
+});
+window.addEventListener("keyup", e => { const a = keyAction(e); if (a) { e.preventDefault(); Keys[a] = false; } });
+// 鼠标左键长按 = 加速（对齐设计）
+canvas.addEventListener("mousedown", e => { if (e.button === 0) Keys.accel = true; });
+window.addEventListener("mouseup", e => { if (e.button === 0) Keys.accel = false; });
+// 触屏：上半屏上升，下半屏下降，双指加速
+const touches = {};
+canvas.addEventListener("touchstart", e => { e.preventDefault(); handleTouch(e); }, { passive: false });
+canvas.addEventListener("touchmove", e => { e.preventDefault(); handleTouch(e); }, { passive: false });
+canvas.addEventListener("touchend", e => { e.preventDefault(); handleTouch(e); }, { passive: false });
+function handleTouch(e) {
+  Keys.up = Keys.down = false; Keys.accel = e.touches.length >= 2;
+  const r = canvas.getBoundingClientRect();
+  for (const t of e.touches) {
+    const y = (t.clientY - r.top) / r.height;
+    if (y < 0.5) Keys.up = true; else Keys.down = true;
+  }
+}
+function consumeJust(a) { if (justPressed[a]) { justPressed[a] = false; return true; } return false; }
+
+/* ---------- 高度 <-> 屏幕 Y（对齐 player_bird.gd / spawner.gd）---------- */
+function screenYForHeight(h) { return lerp(VIEW_H * 0.82, VIEW_H * 0.18, clamp(h / 100, 0, 1)); }
+
+/* =========================================================
+   难度系统（difficulty_system.gd）
+   ========================================================= */
+function paramsForDistance(d) {
+  const s1 = Math.max(0, d) / 1000, s2 = Math.max(0, d) / 2000;
+  return {
+    food_interval: Math.max(1.0, 1.1 * Math.pow(0.95, s1)),
+    tree_chance: Math.min(0.40, 0.25 + 0.03 * s1),
+    predator_chance: Math.min(0.45, 0.0 + 0.04 * s1),
+    rain_duration: Math.min(28, 10 + 1.0 * s1),
+    night_period: Math.max(80, 120 - 10 * s2),
+    scroll_multiplier: Math.min(1.6, 1.0 + 0.08 * s1),
+  };
+}
+
+/* =========================================================
+   玩家小鸟（player_bird.gd）
+   ========================================================= */
+const FLY_FRAMES = []; // 由 init 填充
+const Bird = {
+  height: 50, climbing: false, descending: false, accelerating: false,
+  running: true, forced: "", flashTime: 0, hitTime: 0, fallTimer: 0,
+  rotation: 0, animTime: 0,
+  x: VIEW_W * 0.43, y: 0,
+  CLIMB: 84, DESCEND: 84, FALL: 38,
+  reset() {
+    this.height = 50; this.climbing = this.descending = this.accelerating = false;
+    this.running = true; this.forced = ""; this.flashTime = 0; this.hitTime = 0;
+    this.fallTimer = 0; this.rotation = 0; this.layout();
+  },
+  setRunning(v) { this.running = v; if (!v) this.climbing = this.descending = this.accelerating = false; },
+  flashDamage() { this.flashTime = 0.35; this.hitTime = 0.35; },
+  enterFalling() { this.forced = "falling"; },
+  enterCollapse() { this.forced = "collapse"; this.height = 0; },
+  clearForced() { this.forced = ""; },
+  onGround() { return this.height <= 0.5; },
+  update(dt) {
+    if (this.running && this.forced === "") {
+      const up = Keys.up, down = Keys.down;
+      this.accelerating = !!Keys.accel;
+      this.climbing = up && !down;
+      this.descending = down && !up;
+      if (this.climbing) this.height += this.CLIMB * dt;
+      else if (this.descending) this.height -= this.DESCEND * dt;
+      this.height = clamp(this.height, 0, 100);
+    }
+    if (this.forced === "falling") this.height = Math.max(0, this.height - this.FALL * dt);
+    this.layout(dt);
+    if (this.flashTime > 0) this.flashTime = Math.max(0, this.flashTime - dt);
+    if (this.hitTime > 0) this.hitTime = Math.max(0, this.hitTime - dt);
+    this.animTime += dt;
+  },
+  layout(dt) {
+    dt = dt || 0;
+    this.y = screenYForHeight(this.height);
+    let target = 0;
+    if (this.forced === "falling") target = 35;
+    else if (this.forced === "collapse") target = 0;
+    else if (this.climbing) target = -7;
+    else if (this.descending) target = 7;
+    this.rotation = lerp(this.rotation, target * Math.PI / 180, dt > 0 ? 0.18 : 1);
+  },
+  state() {
+    if (this.forced) return this.forced;
+    if (this.hitTime > 0) return "hit";
+    if (this.accelerating) return "accelerate";
+    if (this.climbing) return "climb";
+    if (this.descending) return "descend";
+    return "fly";
+  },
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+    if (this.flashTime > 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.flashTime * 60);
+      ctx.filter = `brightness(1.3) saturate(${1 + pulse})`;
+    }
+    const st = this.state();
+    let img = null, scale = 0.55;
+    if (st === "fly") {
+      const fi = Math.floor(this.animTime * 14) % FLY_FRAMES.length;
+      img = FLY_FRAMES[fi]; scale = 0.45;
+    } else {
+      img = IMG["bird_" + st];
+    }
+    if (img && img.width) {
+      const w = owOf(img) * scale, h = ohOf(img) * scale;
+      // flip_h = true：朝右
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    }
+    ctx.restore();
+  },
+};
+
+/* =========================================================
+   食物 & 障碍配置（spawner.gd）
+   ========================================================= */
+const FOOD_TYPES = [
+  { id: "ground_insect", layer: "low", min: 0, max: 15, gain: 8, img: "food_ground_insect", scale: 0.45, radius: 14 },
+  { id: "seed_cluster", layer: "low", min: 0, max: 15, gain: 8, img: "food_seed_cluster", scale: 0.45, radius: 14 },
+  { id: "bush_berries", layer: "mid", min: 15, max: 35, gain: 10, img: "food_bush_berries", scale: 0.42, radius: 15 },
+  { id: "canopy_larva", layer: "high", min: 35, max: 70, gain: 12, img: "food_canopy_larva", scale: 0.32, radius: 15 },
+  { id: "canopy_fruit", layer: "high", min: 35, max: 70, gain: 12, img: "food_canopy_fruit", scale: 0.25, radius: 16 },
+];
+const WARM_FOOD = { id: "night_warm_light", min: 70, max: 90, gain: 5, img: "food_warm_light", scale: 0.4, radius: 17, glow: "glow_warm", color: "#ffd16b" };
+const COLD_FOOD = { id: "night_cold_light", min: 10, max: 30, gain: -5, img: "food_cold_light", scale: 0.4, radius: 16, glow: "glow_cold", color: "#a8d2ff" };
+const TREE_CONFIGS = [
+  { img: "tree_tall", min: 15, max: 70, scale: 0.68, loss: 10, hbw: 120, hbh: 330 },
+  { img: "tree_food", min: 15, max: 70, scale: 0.70, loss: 10, hbw: 120, hbh: 330 },
+];
+const BUSH_CONFIGS = [
+  { img: "bush_dense", min: 0, max: 35, scale: 0.4, loss: 5, hbw: 155, hbh: 82 },
+  { img: "bush_sparse", min: 0, max: 35, scale: 0.4, loss: 3, hbw: 155, hbh: 82 },
+];
+
+/* =========================================================
+   生成器（spawner.gd）
+   ========================================================= */
+const MIN_GAP = 240, OBSTACLE_INTERVAL = 3.0, BUSH_CHANCE = 0.15;
+const Spawner = {
+  foods: [], obstacles: [],
+  scrollSpeed: 280, running: false, hideRegular: false,
+  foodInterval: 1.1, treeChance: 0.25,
+  foodTimer: 0.25, treeTimer: 3.0, bushTimer: 4.4,
+  lastResX: -9999, lastObsX: -9999,
+  reset() {
+    this.foods = []; this.obstacles = [];
+    this.foodTimer = 0.25; this.treeTimer = OBSTACLE_INTERVAL; this.bushTimer = OBSTACLE_INTERVAL + 1.4;
+    this.lastResX = -9999; this.lastObsX = -9999; this.hideRegular = false; this.running = true;
+  },
+  setDifficulty(fi, tc) { this.foodInterval = Math.max(0.1, fi); this.treeChance = clamp(tc, 0, 1); },
+  update(dt) {
+    for (const f of this.foods) { f.x -= this.scrollSpeed * dt; f.age += dt; }
+    for (const o of this.obstacles) { o.x -= this.scrollSpeed * dt; }
+    this.foods = this.foods.filter(f => f.x >= -120 && !f.dead);
+    this.obstacles = this.obstacles.filter(o => o.x >= -420 && !o.dead);
+    if (!this.running) return;
+    this.foodTimer -= dt; this.treeTimer -= dt; this.bushTimer -= dt;
+    if (this.foodTimer <= 0) {
+      if (!this.hideRegular) this.spawnFood();
+      this.foodTimer = this.foodInterval + rand(-0.2, 0.3);
+    }
+    if (this.treeTimer <= 0) { if (Math.random() < this.treeChance) this.spawnTree(); this.treeTimer = OBSTACLE_INTERVAL; }
+    if (this.bushTimer <= 0) { if (Math.random() < BUSH_CHANCE) this.spawnBush(); this.bushTimer = OBSTACLE_INTERVAL; }
+  },
+  spawnXForChannel(lastX, extra) {
+    let x = VIEW_W + extra;
+    if (Math.abs(x - lastX) < MIN_GAP) x = lastX + MIN_GAP;
+    if (Math.abs(x - this.lastResX) < MIN_GAP) x = this.lastResX + MIN_GAP;
+    if (Math.abs(x - this.lastObsX) < MIN_GAP) x = this.lastObsX + MIN_GAP;
+    return x;
+  },
+  randomFoodConfig() {
+    const roll = Math.random();
+    const layer = roll < 0.45 ? "low" : (roll < 0.75 ? "mid" : "high");
+    const cands = FOOD_TYPES.filter(f => f.layer === layer);
+    return cands[Math.floor(Math.random() * cands.length)] || FOOD_TYPES[0];
+  },
+  spawnFood() {
+    const c = this.randomFoodConfig();
+    const h = rand(c.min, c.max);
+    const x = this.spawnXForChannel(this.lastResX, 90);
+    this.foods.push({ cfg: c, x, y: screenYForHeight(h), age: 0, radius: c.radius });
+    this.lastResX = x;
+  },
+  spawnLight(cfg) {
+    const h = rand(cfg.min, cfg.max);
+    const x = this.spawnXForChannel(this.lastResX, 90);
+    this.foods.push({ cfg, x, y: screenYForHeight(h), age: 0, radius: cfg.radius });
+    this.lastResX = x;
+  },
+  spawnTree() {
+    const c = TREE_CONFIGS[Math.floor(Math.random() * TREE_CONFIGS.length)];
+    const h = rand(c.min, c.max);
+    const x = this.spawnXForChannel(this.lastObsX, 180);
+    this.obstacles.push({ cfg: c, kind: "tree", x, y: screenYForHeight(h) });
+    this.lastObsX = x;
+  },
+  spawnBush() {
+    const c = BUSH_CONFIGS[Math.floor(Math.random() * BUSH_CONFIGS.length)];
+    const x = this.spawnXForChannel(this.lastObsX, 180);
+    const img = IMG[c.img];
+    const halfH = (img && img.width ? ohOf(img) : 200) * c.scale * 0.5;
+    const y = VIEW_H * 0.84 - halfH;
+    this.obstacles.push({ cfg: c, kind: "bush", x, y });
+    this.lastObsX = x;
+  },
+  // 碰撞：玩家圆(半径30) vs 食物圆 / 障碍矩形
+  checkCollisions(onFood, onObstacle) {
+    const px = Bird.x, py = Bird.y, pr = 30;
+    for (const f of this.foods) {
+      if (f.dead) continue;
+      const dx = px - f.x, dy = py - f.y;
+      if (dx * dx + dy * dy <= (pr + f.radius) * (pr + f.radius)) {
+        f.dead = true; onFood(f.cfg.gain, f.cfg.id, f.x, f.y);
+      }
+    }
+    for (const o of this.obstacles) {
+      if (o.dead || o._hit) continue;
+      const hw = o.cfg.hbw / 2, hh = o.cfg.hbh / 2;
+      const cx = clamp(px, o.x - hw, o.x + hw), cy = clamp(py, o.y - hh, o.y + hh);
+      const dx = px - cx, dy = py - cy;
+      if (dx * dx + dy * dy <= pr * pr) {
+        o._hit = true; onObstacle(o.cfg.loss, o.kind, o.x, o.y);
+      }
+    }
+  },
+  draw() {
+    for (const o of this.obstacles) {
+      const img = IMG[o.cfg.img]; if (!img || !img.width) continue;
+      const w = owOf(img) * o.cfg.scale, h = ohOf(img) * o.cfg.scale;
+      ctx.globalAlpha = o._hit ? 0.6 : 1;
+      ctx.drawImage(img, o.x - w / 2, o.y - h / 2, w, h);
+      ctx.globalAlpha = 1;
+    }
+    for (const f of this.foods) {
+      const c = f.cfg;
+      if (c.glow && IMG[c.glow]) {
+        const g = IMG[c.glow];
+        const pulse = 0.75 + 0.25 * Math.sin(f.age * 5);
+        const gs = (f.radius * 4) / Math.max(1, owOf(g)) * (0.9 + 0.12 * pulse);
+        const gw = owOf(g) * gs, gh = ohOf(g) * gs;
+        ctx.globalAlpha = pulse;
+        ctx.drawImage(g, f.x - gw / 2, f.y - gh / 2, gw, gh);
+        ctx.globalAlpha = 1;
+      }
+      const img = IMG[c.img];
+      if (img && img.width) {
+        const w = owOf(img) * c.scale, h = ohOf(img) * c.scale;
+        ctx.drawImage(img, f.x - w / 2, f.y - h / 2, w, h);
+      } else {
+        ctx.fillStyle = c.color || "#f5c84e";
+        ctx.beginPath(); ctx.arc(f.x, f.y, f.radius, 0, TAU); ctx.fill();
+      }
+    }
+  },
+};
+
+/* =========================================================
+   天气系统（weather_system.gd）
+   ========================================================= */
+const Weather = {
+  phase: "clear", wetness: 0, running: false,
+  checkTimer: 0, warnTimer: 0, rainElapsed: 0, rainDuration: 10,
+  reset() { this.phase = "clear"; this.wetness = 0; this.checkTimer = 0; this.warnTimer = 0; this.rainElapsed = 0; this.running = true; },
+  setRainDuration(v) { this.rainDuration = Math.max(1, v); },
+  isRaining() { return this.phase === "drizzle" || this.phase === "rain" || this.phase === "storm"; },
+  wetMult() { if (this.wetness <= 20) return 1.0; if (this.wetness <= 50) return 1.2; if (this.wetness <= 80) return 1.5; return 2.0; },
+  update(dt) {
+    if (!this.running) return;
+    if (this.phase === "clear") {
+      this.checkTimer += dt;
+      if (this.checkTimer >= 8) { this.checkTimer = 0; if (Math.random() < 0.12) { this.phase = "warning"; this.warnTimer = 0; Audio_.play("rain_warning"); } }
+      this.wetness = Math.max(0, this.wetness - 3 * dt);
+    } else if (this.phase === "warning") {
+      this.warnTimer += dt;
+      if (this.warnTimer >= 2) { this.rainElapsed = 0; this.phase = "drizzle"; }
+    } else {
+      this.rainElapsed += dt;
+      let rate = 3, target = "drizzle";
+      if (this.rainElapsed >= 9) { rate = 10; target = "storm"; }
+      else if (this.rainElapsed >= 5) { rate = 6; target = "rain"; }
+      this.wetness = Math.min(100, this.wetness + rate * dt);
+      this.phase = target;
+      if (this.rainElapsed >= this.rainDuration) { this.phase = "clear"; this.checkTimer = 0; }
+    }
+  },
+  // 覆盖层用代码绘制（雨线 + 暴雨变暗），不依赖大贴图
+  draw(t) {
+    if (this.phase === "warning") { ctx.fillStyle = "rgba(60,66,74,0.35)"; ctx.fillRect(0, 0, VIEW_W, VIEW_H); return; }
+    if (!this.isRaining()) return;
+    const density = this.phase === "drizzle" ? 60 : (this.phase === "rain" ? 130 : 220);
+    ctx.strokeStyle = this.phase === "storm" ? "rgba(200,215,230,0.55)" : "rgba(200,215,230,0.4)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < density; i++) {
+      const seed = i * 73.13;
+      const x = ((seed * 91 + t * (this.phase === "storm" ? 1700 : 1200)) % (VIEW_W + 200)) - 100;
+      const y = ((seed * 57 + t * (this.phase === "storm" ? 1700 : 1200)) % (VIEW_H + 200)) - 100;
+      const len = this.phase === "storm" ? 26 : 18;
+      ctx.moveTo(x, y); ctx.lineTo(x - 6, y + len);
+    }
+    ctx.stroke();
+    if (this.phase === "storm") { ctx.fillStyle = "rgba(20,28,40,0.4)"; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
+  },
+};
+
+/* =========================================================
+   夜航系统（night_system.gd）
+   ========================================================= */
+const Night = {
+  phase: "day", period: 120, dayTimer: 0, phaseTimer: 0, lightTimer: 0, firstDone: false, running: false,
+  DUSK: 5, NIGHT: 7, DAWN: 3,
+  nvOuter: 0.72, nvDark: 0,
+  reset() { this.phase = "day"; this.dayTimer = 0; this.phaseTimer = 0; this.lightTimer = 0; this.firstDone = false; this.running = true; this.nvOuter = 0.72; this.nvDark = 0; },
+  setPeriod(v) { this.period = Math.max(80, v); },
+  isNightHidingFood() { return this.phase === "night"; },
+  enterPhase(p) {
+    if (p === this.phase) return;
+    this.phase = p; this.phaseTimer = 0;
+    if (p === "night") this.lightTimer = 3.0;
+    game.onNightPhase(p);
+  },
+  update(dt, onLight) {
+    this.updateNV(dt);
+    if (!this.running) return;
+    if (this.phase === "day") {
+      this.dayTimer += dt;
+      const trigger = this.firstDone ? this.period : 120;
+      if (this.dayTimer >= trigger) { this.firstDone = true; this.enterPhase("dusk"); }
+      return;
+    }
+    this.phaseTimer += dt;
+    if (this.phase === "dusk") { if (this.phaseTimer >= this.DUSK) this.enterPhase("night"); }
+    else if (this.phase === "night") {
+      this.lightTimer += dt;
+      if (this.lightTimer >= 3.0) {
+        this.lightTimer = 0;
+        if (Math.random() < 0.65) onLight(WARM_FOOD);
+        if (Math.random() < 0.35) onLight(COLD_FOOD);
+      }
+      if (this.phaseTimer >= this.NIGHT) this.enterPhase("dawn");
+    }
+    else if (this.phase === "dawn") { if (this.phaseTimer >= this.DAWN) { this.enterPhase("day"); this.dayTimer = 0; } }
+  },
+  updateNV(dt) {
+    let outerT = 0.72, darkT = 0;
+    if (this.phase === "dusk") { outerT = 0.72; darkT = 0.35; }
+    else if (this.phase === "night") { outerT = 0.42; darkT = 0.82; }
+    else if (this.phase === "dawn") { outerT = 1.3; darkT = 0; }
+    const t = clamp(dt * 6, 0, 1);
+    this.nvOuter = lerp(this.nvOuter, outerT, t);
+    this.nvDark = lerp(this.nvDark, darkT, t);
+  },
+  // 夜色微调叠加（场景贴图已自带夜色）+ 夜视光圈（替代 shader）
+  draw() {
+    if (this.phase === "day" && this.nvDark < 0.01) return;
+    // 贴图已带相位配色，这里仅做轻微加深统一氛围
+    if (this.phase === "dusk") ctx.fillStyle = "rgba(40,30,60,0.12)";
+    else if (this.phase === "night") ctx.fillStyle = "rgba(8,12,40,0.18)";
+    else if (this.phase === "dawn") ctx.fillStyle = "rgba(80,60,70,0.08)";
+    else ctx.fillStyle = "rgba(0,0,0,0)";
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    if (this.nvDark > 0.01) {
+      const cx = Bird.x, cy = Bird.y;
+      const inner = Math.max(0.05, this.nvOuter * 0.38) * VIEW_H;
+      const outer = this.nvOuter * VIEW_H;
+      const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+      g.addColorStop(0, "rgba(0,0,0,0)");
+      g.addColorStop(1, `rgba(4,6,16,${this.nvDark})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
+  },
+};
+
+/* =========================================================
+   天敌系统（predator_system.gd + predator.gd）
+   ========================================================= */
+const PRED = {
+  APPEAR: 1.0, AIM: 0.6, AIM_LOCK: 0.4, DASH: 0.5, DONE_SPEED: 1700,
+  HIT_LOSS: 12, HITBOX: 38, NEAR_MISS: 88, DASH_SPEED: 1700,
+};
+function makePredator(fromTop) {
+  const bx = Bird.x, by = Bird.y;
+  const hoverTarget = { x: bx + 260, y: by - 110 };
+  const appearFrom = fromTop ? { x: bx + 320, y: -160 } : { x: VIEW_W + 220, y: by - 80 };
+  return {
+    phase: "appear", timer: 0, x: appearFrom.x, y: appearFrom.y,
+    appearFrom, hoverTarget, dashDir: { x: -1, y: 0 },
+    hasHit: false, warned: false, locked: false, minDashDist: 1e9, trajAngle: 0, trajLen: 1, dead: false,
+  };
+}
+const Predators = {
+  list: [], running: false, checkTimer: 0, elapsed: 0, baseChance: 0, activeWarnings: 0,
+  reset() { this.list = []; this.running = true; this.checkTimer = 0; this.elapsed = 0; this.activeWarnings = 0; game.setWarning(false); },
+  setBaseChance(v) { this.baseChance = clamp(v, 0, 1); },
+  heightMult() { const h = Bird.height; if (h < 30) return 0.5; if (h <= 60) return 1.0; return 1.5; },
+  update(dt) {
+    if (this.running) {
+      this.elapsed += dt;
+      if (this.elapsed >= 15) {
+        this.checkTimer += dt;
+        if (this.checkTimer >= 1.6) {
+          this.checkTimer = 0;
+          if (Math.random() < this.baseChance * this.heightMult()) this.spawn();
+        }
+      }
+    }
+    for (const p of this.list) this.tick(p, dt);
+    this.list = this.list.filter(p => !p.dead);
+  },
+  spawn() { this.list.push(makePredator(Math.random() < 0.4)); },
+  scare(fromX, fromY, radius) {
+    for (const p of this.list) {
+      if (p.phase !== "aim") continue;
+      const dx = p.x - fromX, dy = p.y - fromY;
+      if (dx * dx + dy * dy <= radius * radius) {
+        if (p.warned) { p.warned = false; this.setWarn(-1); }
+        p.phase = "flee"; p.timer = 0;
+      }
+    }
+  },
+  setWarn(delta) { this.activeWarnings = Math.max(0, this.activeWarnings + delta); game.setWarning(this.activeWarnings > 0); },
+  tick(p, dt) {
+    p.timer += dt;
+    if (p.phase === "appear") {
+      const t = clamp(p.timer / PRED.APPEAR, 0, 1);
+      const e = easeOut(t, -1.8);
+      p.x = lerp(p.appearFrom.x, p.hoverTarget.x, e);
+      p.y = lerp(p.appearFrom.y, p.hoverTarget.y, e);
+      if (p.timer >= PRED.APPEAR) { p.phase = "aim"; p.timer = 0; }
+    } else if (p.phase === "aim") {
+      if (!p.warned) { p.warned = true; this.setWarn(1); Audio_.play("predator_aim"); }
+      if (!p.locked) {
+        const tx = Bird.x, ty = Bird.y;
+        p.trajAngle = Math.atan2(ty - p.y, tx - p.x);
+        p.trajLen = Math.hypot(tx - p.x, ty - p.y);
+        if (p.timer >= PRED.AIM * PRED.AIM_LOCK) {
+          let dx = tx - p.x, dy = ty - p.y; const len = Math.hypot(dx, dy) || 1;
+          p.dashDir = { x: dx / len, y: dy / len }; p.locked = true;
+        }
+      }
+      if (p.timer >= PRED.AIM) {
+        p.phase = "dash"; p.timer = 0;
+        if (p.warned) { p.warned = false; this.setWarn(-1); }
+      }
+    } else if (p.phase === "dash") {
+      p.x += p.dashDir.x * PRED.DASH_SPEED * dt;
+      p.y += p.dashDir.y * PRED.DASH_SPEED * dt;
+      p.minDashDist = Math.min(p.minDashDist, Math.hypot(p.x - Bird.x, p.y - Bird.y));
+      // 命中判定
+      if (!p.hasHit && Math.hypot(p.x - Bird.x, p.y - Bird.y) <= PRED.HITBOX + 30) {
+        p.hasHit = true; game.onPredatorHit(PRED.HIT_LOSS);
+      }
+      if (p.timer >= PRED.DASH) {
+        if (!p.hasHit) { game.onPredatorDodged(); if (p.minDashDist <= PRED.NEAR_MISS) game.onPredatorNearMiss(); }
+        p.phase = "done"; p.timer = 0;
+      }
+    } else if (p.phase === "done") {
+      p.x += p.dashDir.x * PRED.DASH_SPEED * 0.5 * dt;
+      p.y += p.dashDir.y * PRED.DASH_SPEED * 0.5 * dt;
+      if (p.x < -360 || p.y < -360 || p.y > VIEW_H + 360) p.dead = true;
+    } else if (p.phase === "flee") {
+      const n = Math.hypot(1, -1.2);
+      p.x += (1 / n) * PRED.DASH_SPEED * 0.6 * dt;
+      p.y += (-1.2 / n) * PRED.DASH_SPEED * 0.6 * dt;
+      if (p.x > VIEW_W + 360 || p.y < -360) p.dead = true;
+    }
+  },
+  draw() {
+    for (const p of this.list) {
+      // 轨迹红线
+      if (p.phase === "aim") {
+        ctx.save();
+        ctx.translate(p.x, p.y); ctx.rotate(p.trajAngle);
+        const traj = IMG.traj;
+        const locked = p.locked;
+        ctx.globalAlpha = locked ? 0.92 : 0.5;
+        if (traj && traj.width) {
+          const sx = clamp(p.trajLen / owOf(traj), 0.2, 2.5);
+          const sy = locked ? 1.4 : 1.0;
+          ctx.drawImage(traj, 0, -ohOf(traj) * sy / 2, owOf(traj) * sx, ohOf(traj) * sy);
+        } else {
+          ctx.strokeStyle = locked ? "rgba(255,82,56,0.92)" : "rgba(255,64,51,0.5)";
+          ctx.lineWidth = locked ? 5 : 3;
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(p.trajLen, 0); ctx.stroke();
+        }
+        ctx.restore();
+      }
+      // 天敌精灵
+      let key = "pred_hover";
+      if (p.phase === "aim") key = "pred_aim";
+      else if (p.phase === "dash" || p.phase === "done" || p.phase === "flee") key = "pred_dash";
+      const img = IMG[key];
+      if (img && img.width) {
+        const s = 0.6, w = owOf(img) * s, h = ohOf(img) * s;
+        ctx.drawImage(img, p.x - w / 2, p.y - h / 2, w, h);
+      }
+    }
+  },
+};
+function easeOut(t, c) { // 近似 Godot ease(t, -1.8)（curve<0 -> ease out）
+  return 1 - Math.pow(1 - t, 1 + Math.abs(c));
+}
+
+/* =========================================================
+   VFX（vfx.gd）—— 拾取爆发 / 受击闪光 / 羽毛 / 振翅
+   ========================================================= */
+const Vfx = {
+  effects: [], speedLines: false,
+  reset() { this.effects = []; this.speedLines = false; },
+  playPickup(x, y) { this.effects.push({ kind: "pickup", x, y, t: 0, life: 0.5 }); },
+  playHit(x, y) { this.effects.push({ kind: "hit", x, y, t: 0, life: 0.4 }); for (let i = 0; i < 8; i++) this.effects.push({ kind: "feather", x, y, t: 0, life: 0.7, vx: rand(-180, 180), vy: rand(-180, 60) }); },
+  playFlap(x, y) { this.effects.push({ kind: "flap", x, y, t: 0, life: 0.5 }); },
+  setSpeedLines(v) { this.speedLines = v; },
+  update(dt) { for (const e of this.effects) { e.t += dt; if (e.vx !== undefined) { e.x += e.vx * dt; e.y += e.vy * dt; e.vy += 300 * dt; } } this.effects = this.effects.filter(e => e.t < e.life); },
+  draw() {
+    for (const e of this.effects) {
+      const k = e.t / e.life;
+      if (e.kind === "pickup") {
+        const img = IMG.vfx_pickup;
+        if (img && img.width) { ctx.globalAlpha = 1 - k; const s = 0.4 + k * 0.5; const w = owOf(img) * s, h = ohOf(img) * s; ctx.drawImage(img, e.x - w / 2, e.y - h / 2, w, h); ctx.globalAlpha = 1; }
+        else { ctx.globalAlpha = 1 - k; ctx.fillStyle = "#ffe07a"; ctx.beginPath(); ctx.arc(e.x, e.y, 10 + k * 30, 0, TAU); ctx.fill(); ctx.globalAlpha = 1; }
+      } else if (e.kind === "hit") {
+        ctx.globalAlpha = (1 - k) * 0.8; ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(e.x, e.y, 20 + k * 40, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+      } else if (e.kind === "feather") {
+        ctx.globalAlpha = 1 - k; ctx.fillStyle = "#d8cfc0"; ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.t * 6); ctx.fillRect(-3, -1.5, 6, 3); ctx.restore(); ctx.globalAlpha = 1;
+      } else if (e.kind === "flap") {
+        ctx.globalAlpha = (1 - k) * 0.6; ctx.strokeStyle = "#cfe"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(e.x, e.y, k * 320, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    }
+    if (this.speedLines) {
+      ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 2;
+      const t = now();
+      ctx.beginPath();
+      for (let i = 0; i < 12; i++) {
+        const y = (i * 61 + (t * 600 % VIEW_H));
+        const yy = y % VIEW_H;
+        ctx.moveTo(Bird.x - 40, yy); ctx.lineTo(Bird.x - 160, yy);
+      }
+      ctx.stroke();
+    }
+  },
+};
+
+/* =========================================================
+   背景滚动（代码绘制视差，替代 20MB 大图）
+   ========================================================= */
+const World = {
+  scrollSpeed: 280, offset: 0,
+  curScene: "bg_day", prevScene: "bg_day", fade: 1,
+  reset() { this.offset = 0; this.curScene = this.prevScene = this.targetScene(); this.fade = 1; },
+  setScroll(v) { this.scrollSpeed = v; },
+  // 按相位选择场景贴图（夜 > 黄昏/黎明 > 雨 > 白天）
+  targetScene() {
+    if (Night.phase === "night") return "bg_night";
+    if (Night.phase === "dusk" || Night.phase === "dawn") return "bg_dusk";
+    if (Weather.isRaining()) return "bg_rain";
+    return "bg_day";
+  },
+  update(dt) {
+    this.offset += this.scrollSpeed * dt;
+    const want = this.targetScene();
+    if (want !== this.curScene) { this.prevScene = this.curScene; this.curScene = want; this.fade = 0; }
+    if (this.fade < 1) this.fade = Math.min(1, this.fade + dt / 1.2); // 1.2s 渐变
+  },
+  // 天空兜底色（贴图未加载时）
+  skyColors() {
+    if (Night.phase === "night") return ["#0b1335", "#1a2350"];
+    if (Night.phase === "dusk" || Night.phase === "dawn") return ["#3a3a6b", "#a86a7a"];
+    if (Weather.isRaining()) return ["#5a6b78", "#8a98a4"];
+    return ["#7db8d8", "#bfe0ec"];
+  },
+  draw() {
+    const cur = IMG[this.curScene];
+    if (!cur || !cur.width) {
+      // 兜底：贴图未就绪时用渐变天空 + 地面带
+      const [c1, c2] = this.skyColors();
+      const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+      g.addColorStop(0, c1); g.addColorStop(1, c2);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+      ctx.fillStyle = "#4a7c40"; ctx.fillRect(0, VIEW_H * 0.82, VIEW_W, VIEW_H * 0.18);
+      return;
+    }
+    // 旧场景打底，新场景按 fade 叠加 -> 平滑过渡
+    if (this.fade < 1 && this.prevScene !== this.curScene) {
+      drawSceneLoop(IMG[this.prevScene], this.offset, 1);
+      drawSceneLoop(cur, this.offset, this.fade);
+    } else {
+      drawSceneLoop(cur, this.offset, 1);
+    }
+  },
+};
+// 横向无缝循环铺贴场景（覆盖视口高度，对齐 scrolling_world.gd 的 cover 逻辑）
+function drawSceneLoop(img, offset, alpha) {
+  if (!img || !img.width) return;
+  const scale = VIEW_H / img.height;
+  const w = img.width * scale;
+  let startX = -((offset % w + w) % w);
+  ctx.globalAlpha = alpha;
+  for (let x = startX; x < VIEW_W; x += w) {
+    ctx.drawImage(img, x, 0, w, VIEW_H);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* =========================================================
+   成就（achievement_system.gd）
+   ========================================================= */
+const ACHIEVEMENTS = [
+  { id: "yi_niao", title: "我是益鸟", desc: "累计吃掉 10 只虫子。", kind: "count", stat: "insects", threshold: 10 },
+  { id: "cheng_le", title: "有点撑了", desc: "累计进食 20 次。", kind: "count", stat: "food_total", threshold: 20 },
+  { id: "biao_fei", title: "膘肥体壮", desc: "饱食度首次喂到 100。", kind: "event", event: "hunger_full" },
+  { id: "bu_shang_dang", title: "我不上当", desc: "整夜没碰冷光假食撑到黎明。", kind: "event", event: "clean_night" },
+  { id: "min_jie", title: "身手敏捷", desc: "累计躲过 20 次天敌冲刺。", kind: "count", stat: "predators_dodged", threshold: 20 },
+  { id: "xian_xiang", title: "险象环生", desc: "累计擦身而过 10 次。", kind: "count", stat: "near_miss", threshold: 10 },
+  { id: "luo_tang", title: "落汤鸟", desc: "累计雨中飞行 60 秒。", kind: "count", stat: "rain_seconds", threshold: 60 },
+  { id: "ye_xing", title: "夜行者", desc: "累计经历 5 次夜航并撑到天亮。", kind: "count", stat: "nights_survived", threshold: 5 },
+  { id: "wan_li", title: "万里归途", desc: "历史最佳距离突破 5000 米。", kind: "best", threshold: 5000 },
+  { id: "chang_lai", title: "常来常往", desc: "累计游玩 20 局。", kind: "count", stat: "runs", threshold: 20 },
+];
+const Achievements = {
+  checkUnlocks() {
+    for (const a of ACHIEVEMENTS) {
+      if (Save.isUnlocked(a.id)) continue;
+      let reached = false;
+      if (a.kind === "count") reached = Save.stat(a.stat) >= a.threshold;
+      else if (a.kind === "best") reached = Save.best() >= a.threshold;
+      if (reached) this.unlock(a);
+    }
+  },
+  notifyEvent(ev) {
+    for (const a of ACHIEVEMENTS) {
+      if (a.kind !== "event" || a.event !== ev || Save.isUnlocked(a.id)) continue;
+      this.unlock(a);
+    }
+  },
+  unlock(a) { if (Save.unlock(a.id)) { game.showToast(a.title, a.desc); Audio_.play("menu_confirm"); } },
+};
+
+/* =========================================================
+   HUD（hud.gd）—— 中文文字 HUD
+   ========================================================= */
+const HUD = {
+  floats: [], toasts: [], warning: false, nightLabel: "",
+  reset() { this.floats = []; this.toasts = []; this.warning = false; this.nightLabel = ""; },
+  showFloat(delta, x, y) { this.floats.push({ delta, x, y, t: 0 }); },
+  showToast(title, desc) { this.toasts.push({ title, desc, t: 0 }); },
+  update(dt) {
+    for (const f of this.floats) { f.t += dt; f.y -= 30 * dt; }
+    this.floats = this.floats.filter(f => f.t < 1.2);
+    for (const t of this.toasts) t.t += dt;
+    this.toasts = this.toasts.filter(t => t.t < 3.5);
+  },
+  draw() {
+    ctx.textBaseline = "top";
+    // 顶部状态条
+    const pad = 20;
+    // 饱食度
+    bar(pad, pad, 220, 18, game.hunger / 100, "#ffd24a", "饱食 " + Math.round(game.hunger));
+    // 湿度
+    bar(pad, pad + 28, 220, 14, Weather.wetness / 100, "#6cc0ff", "湿度 " + Math.round(Weather.wetness));
+    // 高度
+    ctx.fillStyle = "#fff"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText("高度 " + Math.round(Bird.height) + " m", pad, pad + 50);
+    // 距离（中上）
+    ctx.font = "bold 30px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(Math.floor(game.distance) + " m", VIEW_W / 2, pad);
+    ctx.font = "13px sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText("最佳 " + Math.floor(Save.best()) + " m　时间 " + game.flightTime.toFixed(0) + "s", VIEW_W / 2, pad + 36);
+    // 夜航提示
+    if (this.nightLabel) {
+      ctx.font = "bold 20px sans-serif"; ctx.fillStyle = "#cfe0ff"; ctx.textAlign = "right";
+      ctx.fillText("夜航·" + this.nightLabel, VIEW_W - pad, pad);
+    }
+    // 天敌警告箭头
+    if (this.warning) {
+      const a = 0.5 + 0.5 * Math.sin(now() * 12);
+      ctx.fillStyle = `rgba(255,60,50,${a})`; ctx.font = "bold 26px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("⚠ 天敌来袭", VIEW_W / 2, VIEW_H * 0.12);
+    }
+    // 浮动数值
+    ctx.textAlign = "center"; ctx.font = "bold 20px sans-serif";
+    for (const f of this.floats) {
+      ctx.globalAlpha = 1 - f.t / 1.2;
+      ctx.fillStyle = f.delta >= 0 ? "#7CFC8A" : "#ff7a6a";
+      ctx.fillText((f.delta >= 0 ? "+" : "") + Math.round(f.delta), f.x, f.y);
+    }
+    ctx.globalAlpha = 1;
+    // 成就 toast
+    let ty = VIEW_H * 0.3;
+    for (const t of this.toasts) {
+      const a = t.t < 0.3 ? t.t / 0.3 : (t.t > 3 ? (3.5 - t.t) / 0.5 : 1);
+      ctx.globalAlpha = clamp(a, 0, 1);
+      ctx.fillStyle = "rgba(20,24,30,0.85)"; roundRect(VIEW_W / 2 - 180, ty, 360, 56, 8); ctx.fill();
+      ctx.fillStyle = "#ffd24a"; ctx.font = "bold 17px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("🏅 " + t.title, VIEW_W / 2, ty + 10);
+      ctx.fillStyle = "#ddd"; ctx.font = "12px sans-serif";
+      ctx.fillText(t.desc, VIEW_W / 2, ty + 32);
+      ty += 64;
+    }
+    ctx.globalAlpha = 1;
+  },
+};
+function bar(x, y, w, h, frac, color, label) {
+  ctx.fillStyle = "rgba(0,0,0,0.4)"; roundRect(x, y, w, h, h / 2); ctx.fill();
+  ctx.fillStyle = color; roundRect(x, y, w * clamp(frac, 0, 1), h, h / 2); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(label, x + 6, y + h / 2 + 1);
+  ctx.textBaseline = "top";
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+/* =========================================================
+   游戏主协调器（main.gd）
+   ========================================================= */
+const game = {
+  state: "intro", // intro | playing | falling | collapsed | gameover | paused
+  hunger: 60, distance: 0, flightTime: 0, maxHeight: 50, foodCount: 0,
+  INITIAL_HUNGER: 60, MAX_HUNGER: 100,
+  NORMAL_SCROLL: 280, ACCEL_SCROLL: 500, PX_PER_M: 10,
+  FALL_DURATION: 3, COLLAPSE_WINDOW: 3, COLLAPSE_HUNGER: 10,
+  FLAP_COST: 3, FLAP_COOLDOWN: 4, FLAP_RADIUS: 320, NEAR_MISS_GAIN: 4,
+  INSECT_IDS: ["ground_insect", "canopy_larva"],
+  hungerTick: 0, hitPause: 0, fallTimer: 0, collapseTimer: 0, flapCooldown: 0,
+  scrollMult: 1, ateColdLight: false, achTimer: 0,
+
+  prepareRun() {
+    this.hunger = this.INITIAL_HUNGER; this.distance = 0; this.flightTime = 0;
+    this.maxHeight = 50; this.foodCount = 0;
+    this.hungerTick = 0; this.hitPause = 0; this.fallTimer = 0; this.collapseTimer = 0;
+    this.flapCooldown = 0; this.ateColdLight = false; this.scrollMult = 1;
+    Bird.reset(); World.reset(); Spawner.reset(); Weather.reset(); Night.reset();
+    Predators.reset(); Vfx.reset(); HUD.reset();
+    Spawner.running = Weather.running = Night.running = Predators.running = false;
+  },
+  startRun() {
+    this.prepareRun();
+    this.state = "playing";
+    Bird.setRunning(true); Spawner.running = Weather.running = Night.running = Predators.running = true;
+    Save.addStat("runs", 1); Achievements.checkUnlocks();
+    Audio_.playMusic(); Audio_.play("run_start");
+  },
+  currentScroll() { if (this.hitPause > 0) return 0; return (Bird.accelerating ? this.ACCEL_SCROLL : this.NORMAL_SCROLL) * this.scrollMult; },
+  heightMult() { return Bird.height > 60 ? 0.8 : 1.0; },
+
+  update(dt) {
+    if (this.state === "intro") return;
+    if (this.state === "paused") {
+      if (consumeJust("pause")) this.state = "playing";
+      else if (consumeJust("restart")) this.startRun();
+      return;
+    }
+
+    if (consumeJust("restart")) { this.startRun(); return; }
+
+    if (this.state === "playing") {
+      if (consumeJust("pause")) { this.state = "paused"; return; }
+      this.flightTime += dt;
+      this.maxHeight = Math.max(this.maxHeight, Bird.height);
+      this.hitPause = Math.max(0, this.hitPause - dt);
+      this.flapCooldown = Math.max(0, this.flapCooldown - dt);
+      if (consumeJust("flap")) this.tryFlap();
+
+      const pr = paramsForDistance(this.distance);
+      Spawner.setDifficulty(pr.food_interval, pr.tree_chance);
+      Weather.setRainDuration(pr.rain_duration);
+      Night.setPeriod(pr.night_period);
+      Predators.setBaseChance(pr.predator_chance);
+      this.scrollMult = pr.scroll_multiplier;
+
+      const scroll = this.currentScroll();
+      World.setScroll(scroll); Spawner.scrollSpeed = scroll;
+      this.distance += scroll * dt / this.PX_PER_M;
+      this.consumeHunger(dt);
+
+      if (Weather.isRaining()) Save.addStat("rain_seconds", dt);
+      this.achTimer += dt;
+      if (this.achTimer >= 0.5) { this.achTimer = 0; Achievements.checkUnlocks(); }
+
+      Spawner.hideRegular = Night.isNightHidingFood();
+      Vfx.setSpeedLines(Bird.accelerating);
+
+      Bird.update(dt);
+      World.update(dt);
+      Spawner.update(dt);
+      Weather.update(dt);
+      Night.update(dt, (cfg) => Spawner.spawnLight(cfg));
+      Predators.update(dt);
+      Vfx.update(dt);
+      Spawner.checkCollisions(
+        (gain, id, x, y) => this.onFood(gain, id, x, y),
+        (loss, kind, x, y) => this.onObstacle(loss, kind, x, y)
+      );
+      HUD.update(dt);
+      if (this.hunger <= 0) this.beginFailure();
+    } else {
+      // 结束态：坠落 / 倒地
+      Bird.update(dt); World.update(dt); Spawner.update(dt); Vfx.update(dt); HUD.update(dt);
+      if (this.state === "falling") {
+        this.fallTimer += dt;
+        if (Bird.onGround()) this.enterCollapse();
+        else if (this.fallTimer >= this.FALL_DURATION) this.gameOver();
+      } else if (this.state === "collapsed") {
+        this.collapseTimer += dt;
+        Spawner.checkCollisions((gain, id, x, y) => this.onFood(gain, id, x, y), () => {});
+        if (this.collapseTimer >= this.COLLAPSE_WINDOW) this.gameOver();
+      }
+    }
+  },
+
+  consumeHunger(dt) {
+    this.hungerTick += dt;
+    while (this.hungerTick >= 0.5 && this.state === "playing") {
+      this.hungerTick -= 0.5;
+      let mult = Weather.wetMult() * this.heightMult() * (Bird.accelerating ? 1.4 : 1.0);
+      let extra = 0;
+      if (Bird.climbing) extra += 0.5;
+      if (Bird.descending) extra += 0.2;
+      if (Bird.accelerating) extra += 0.7;
+      const cost = 1.3 * mult + extra;
+      this.hunger = Math.max(0, this.hunger - cost);
+    }
+  },
+
+  onFood(gain, id, x, y) {
+    if (this.state !== "playing" && this.state !== "collapsed") return;
+    if (this.state === "collapsed") { if (gain > 0) this.recoverFromCollapse(); return; }
+    this.hunger = Math.min(this.MAX_HUNGER, this.hunger + gain);
+    if (gain > 0) {
+      this.foodCount++; Save.addStat("food_total", 1);
+      if (this.INSECT_IDS.includes(id)) Save.addStat("insects", 1);
+      Achievements.checkUnlocks();
+    }
+    if (id === "night_cold_light") this.ateColdLight = true;
+    if (this.hunger >= this.MAX_HUNGER) Achievements.notifyEvent("hunger_full");
+    Vfx.playPickup(x, y); HUD.showFloat(gain, x, y); Audio_.playFood(id);
+  },
+  onObstacle(loss, kind, x, y) {
+    if (this.state !== "playing") return;
+    this.hunger = Math.max(0, this.hunger - loss);
+    this.hitPause = kind === "tree" ? 0.3 : 0.2;
+    Bird.flashDamage(); Vfx.playHit(x, y); HUD.showFloat(-loss, x, y);
+    Audio_.play(kind === "tree" ? "tree_hit" : "bush_hit");
+    if (this.hunger <= 0) this.beginFailure();
+  },
+  onPredatorHit(loss) {
+    if (this.state !== "playing") return;
+    this.hunger = Math.max(0, this.hunger - loss);
+    Bird.flashDamage(); Vfx.playHit(Bird.x, Bird.y); HUD.showFloat(-loss, Bird.x, Bird.y);
+    Audio_.play("predator_hit");
+    if (this.hunger <= 0) this.beginFailure();
+  },
+  onPredatorDodged() { if (this.state === "playing") { Save.addStat("predators_dodged", 1); Achievements.checkUnlocks(); } },
+  onPredatorNearMiss() {
+    if (this.state !== "playing") return;
+    this.hunger = Math.min(this.MAX_HUNGER, this.hunger + this.NEAR_MISS_GAIN);
+    Save.addStat("near_miss", 1); Achievements.checkUnlocks();
+    HUD.showFloat(this.NEAR_MISS_GAIN, Bird.x, Bird.y);
+  },
+  setWarning(v) { HUD.warning = v; },
+  onNightPhase(phase) {
+    HUD.nightLabel = phase === "dusk" ? "黄昏" : phase === "night" ? "黑夜" : phase === "dawn" ? "黎明" : "";
+    if (phase === "night") this.ateColdLight = false;
+    else if (phase === "dawn" && this.state === "playing") {
+      Save.addStat("nights_survived", 1); Achievements.checkUnlocks();
+      if (!this.ateColdLight) Achievements.notifyEvent("clean_night");
+    }
+    if (phase === "dusk") Audio_.play("night_dusk");
+    else if (phase === "night") Audio_.play("night_arrive");
+    else if (phase === "dawn") Audio_.play("night_dawn");
+  },
+
+  tryFlap() {
+    if (this.flapCooldown > 0) return;
+    this.flapCooldown = this.FLAP_COOLDOWN;
+    this.hunger = Math.max(0, this.hunger - this.FLAP_COST);
+    Predators.scare(Bird.x, Bird.y, this.FLAP_RADIUS);
+    Vfx.playFlap(Bird.x, Bird.y); Audio_.play("predator_aim");
+    if (this.hunger <= 0) this.beginFailure();
+  },
+
+  beginFailure() {
+    if (this.state === "falling" || this.state === "collapsed") return;
+    Spawner.running = Weather.running = Night.running = Predators.running = false;
+    World.setScroll(0); Vfx.setSpeedLines(false);
+    if (Bird.onGround()) this.enterCollapse();
+    else { this.state = "falling"; this.fallTimer = 0; Bird.setRunning(false); Bird.enterFalling(); Audio_.play("falling"); }
+  },
+  enterCollapse() {
+    this.state = "collapsed"; this.collapseTimer = 0;
+    Bird.setRunning(false); Bird.enterCollapse();
+    Spawner.running = true; Spawner.scrollSpeed = this.NORMAL_SCROLL; World.setScroll(this.NORMAL_SCROLL);
+  },
+  recoverFromCollapse() {
+    this.state = "playing"; this.collapseTimer = 0; this.hunger = this.COLLAPSE_HUNGER;
+    Bird.clearForced(); Bird.setRunning(true); Audio_.play("recover");
+    Spawner.running = Weather.running = Night.running = Predators.running = true;
+  },
+  gameOver() {
+    this.state = "gameover";
+    World.setScroll(0); Spawner.running = false; Bird.setRunning(false); Vfx.setSpeedLines(false);
+    Save.updateBest(this.distance); Save.flush(); Achievements.checkUnlocks();
+    HUD.warning = false; this.best = Save.best();
+    Audio_.play("game_over");
+  },
+  showToast(t, d) { HUD.showToast(t, d); },
+
+  /* ---- 渲染 ---- */
+  draw() {
+    World.draw();
+    Spawner.draw();
+    Vfx.draw();
+    Predators.draw();
+    Bird.draw();
+    Weather.draw(now());
+    Night.draw();
+    if (this.state !== "intro") HUD.draw();
+    if (this.state === "gameover") this.drawGameOver();
+    if (this.state === "paused") this.drawPause();
+    if (this.state === "intro") this.drawIntro();
+  },
+  drawIntro() {
+    ctx.fillStyle = "rgba(10,14,20,0.55)"; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff"; ctx.font = "bold 64px sans-serif";
+    ctx.fillText("归 途", VIEW_W / 2, VIEW_H * 0.36);
+    ctx.font = "20px sans-serif"; ctx.fillStyle = "#cde";
+    ctx.fillText("HOMEWARD · 轻量版", VIEW_W / 2, VIEW_H * 0.46);
+    const a = 0.5 + 0.5 * Math.sin(now() * 3);
+    ctx.globalAlpha = a; ctx.font = "bold 24px sans-serif"; ctx.fillStyle = "#ffd24a";
+    ctx.fillText("点击屏幕 / 按任意键 开始", VIEW_W / 2, VIEW_H * 0.6);
+    ctx.globalAlpha = 1;
+    ctx.font = "14px sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.fillText("最佳距离 " + Math.floor(Save.best()) + " m", VIEW_W / 2, VIEW_H * 0.7);
+  },
+  drawPause() {
+    ctx.fillStyle = "rgba(10,14,20,0.7)"; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#fff";
+    ctx.font = "bold 48px sans-serif"; ctx.fillText("暂停", VIEW_W / 2, VIEW_H * 0.4);
+    ctx.font = "20px sans-serif"; ctx.fillStyle = "#cde";
+    ctx.fillText("Esc 继续　R 重新开始", VIEW_W / 2, VIEW_H * 0.52);
+  },
+  drawGameOver() {
+    ctx.fillStyle = "rgba(10,14,20,0.78)"; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#ff9a6a"; ctx.font = "bold 48px sans-serif";
+    ctx.fillText("旅程结束", VIEW_W / 2, VIEW_H * 0.26);
+    ctx.fillStyle = "#fff"; ctx.font = "22px sans-serif";
+    const lines = [
+      "飞行距离　" + Math.floor(this.distance) + " m",
+      "飞行时间　" + this.flightTime.toFixed(1) + " s",
+      "收集食物　" + this.foodCount + " 个",
+      "最高高度　" + Math.round(this.maxHeight) + " m",
+      "历史最佳　" + Math.floor(Save.best()) + " m",
+    ];
+    lines.forEach((l, i) => ctx.fillText(l, VIEW_W / 2, VIEW_H * 0.4 + i * 34));
+    const a = 0.5 + 0.5 * Math.sin(now() * 3);
+    ctx.globalAlpha = a; ctx.fillStyle = "#ffd24a"; ctx.font = "bold 24px sans-serif";
+    ctx.fillText("按 R 再来一局", VIEW_W / 2, VIEW_H * 0.78);
+    ctx.globalAlpha = 1;
+  },
+};
+
+/* ---- intro / gameover 点击开始 ---- */
+function startInteraction() {
+  if (game.state === "intro") { game.startRun(); }
+  else if (game.state === "gameover") { game.startRun(); }
+  else if (game.state === "paused") { game.state = "playing"; }
+}
+canvas.addEventListener("mousedown", () => { if (game.state === "intro" || game.state === "gameover") startInteraction(); });
+canvas.addEventListener("touchstart", () => { if (game.state === "intro" || game.state === "gameover") startInteraction(); });
+window.addEventListener("keydown", e => {
+  if (game.state === "intro") { game.startRun(); }
+  else if (game.state === "gameover" && e.code === "KeyR") { /* handled in update */ }
+});
+
+/* ---- 主循环 ---- */
+let last = now();
+function frame() {
+  const t = now();
+  let dt = t - last; last = t;
+  if (dt > 0.05) dt = 0.05; // 防卡顿大跳
+  game.update(dt);
+  game.draw();
+  requestAnimationFrame(frame);
+}
+
+/* ---- 自适应缩放 ---- */
+function resize() {
+  const wrap = document.getElementById("wrap");
+  const scale = Math.min(wrap.clientWidth / VIEW_W, wrap.clientHeight / VIEW_H);
+  canvas.style.width = (VIEW_W * scale) + "px";
+  canvas.style.height = (VIEW_H * scale) + "px";
+}
+window.addEventListener("resize", resize);
+
+/* ---- 启动 ---- */
+function init() {
+  // 收集飞行帧
+  for (let i = 1; i <= 25; i++) {
+    const k = "fly_" + String(i).padStart(3, "0");
+    if (IMG[k]) FLY_FRAMES.push(IMG[k]);
+  }
+  if (FLY_FRAMES.length === 0 && IMG.bird_fly) FLY_FRAMES.push(IMG.bird_fly);
+  Save.load();
+  resize();
+  document.getElementById("loading").style.display = "none";
+  game.prepareRun();
+  requestAnimationFrame(frame);
+}
+loadAssets(p => { document.getElementById("barfill").style.width = (p * 100) + "%"; }).then(init);
+})();
+</script>
+</body>
+</html>

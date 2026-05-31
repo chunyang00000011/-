@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://birdflightmain"]
+[gd_scene load_steps=16 format=3 uid="uid://birdflightmain"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/scrolling_world.gd" id="2_world"]
@@ -8,6 +8,13 @@
 [ext_resource type="Script" path="res://scripts/intro_screen.gd" id="6_intro"]
 [ext_resource type="Texture2D" path="res://assets/intro/homeward_title.png" id="7_title"]
 [ext_resource type="VideoStream" path="res://assets/intro/homeward_intro.ogv" id="8_intro_video"]
+[ext_resource type="Script" path="res://scripts/difficulty_system.gd" id="9_difficulty"]
+[ext_resource type="Script" path="res://scripts/weather_system.gd" id="10_weather"]
+[ext_resource type="Script" path="res://scripts/night_system.gd" id="11_night"]
+[ext_resource type="Script" path="res://scripts/predator_system.gd" id="12_predator"]
+[ext_resource type="Script" path="res://scripts/vfx.gd" id="13_vfx"]
+[ext_resource type="Script" path="res://scripts/pause_menu.gd" id="14_pause"]
+[ext_resource type="Script" path="res://scripts/achievement_system.gd" id="15_achievement"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -19,15 +26,38 @@ script = ExtResource("2_world")
 z_index = 5
 script = ExtResource("4_spawner")
 
+[node name="PredatorSystem" type="Node2D" parent="."]
+z_index = 15
+script = ExtResource("12_predator")
+
 [node name="Player" type="Area2D" parent="."]
 z_index = 20
 script = ExtResource("3_player")
 
 [node name="Sprite" type="AnimatedSprite2D" parent="Player"]
 
+[node name="DifficultySystem" type="Node" parent="."]
+script = ExtResource("9_difficulty")
+
+[node name="WeatherSystem" type="Node" parent="."]
+script = ExtResource("10_weather")
+
+[node name="NightSystem" type="Node" parent="."]
+script = ExtResource("11_night")
+
+[node name="AchievementSystem" type="Node" parent="."]
+script = ExtResource("15_achievement")
+
+[node name="Vfx" type="Node2D" parent="."]
+script = ExtResource("13_vfx")
+
 [node name="HUD" type="CanvasLayer" parent="."]
 layer = 10
 script = ExtResource("5_hud")
+
+[node name="PauseMenu" type="CanvasLayer" parent="."]
+layer = 50
+script = ExtResource("14_pause")
 
 [node name="Intro" type="CanvasLayer" parent="."]
 layer = 100

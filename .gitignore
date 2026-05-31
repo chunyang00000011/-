@@ -1,3 +1,10 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Python/tooling caches
+__pycache__/
+*.py[cod]
+
+# Local generated previews
+tools/_pred_preview/
