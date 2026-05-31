@@ -163,6 +163,7 @@ function consumeJust(a) { if (justPressed[a]) { justPressed[a] = false; return t
 
 /* ---------- 高度 <-> 屏幕 Y（对齐 player_bird.gd / spawner.gd）---------- */
 function screenYForHeight(h) { return lerp(VIEW_H * 0.82, VIEW_H * 0.18, clamp(h / 100, 0, 1)); }
+function groundYForObstacle() { return VIEW_H * 0.84; }
 
 /* =========================================================
    难度系统（difficulty_system.gd）
@@ -339,9 +340,11 @@ const Spawner = {
   },
   spawnTree() {
     const c = TREE_CONFIGS[Math.floor(Math.random() * TREE_CONFIGS.length)];
-    const h = rand(c.min, c.max);
     const x = this.spawnXForChannel(this.lastObsX, 180);
-    this.obstacles.push({ cfg: c, kind: "tree", x, y: screenYForHeight(h) });
+    const img = IMG[c.img];
+    const halfH = (img && img.width ? ohOf(img) : 500) * c.scale * 0.5;
+    const y = groundYForObstacle() - halfH;
+    this.obstacles.push({ cfg: c, kind: "tree", x, y });
     this.lastObsX = x;
   },
   spawnBush() {
@@ -349,7 +352,7 @@ const Spawner = {
     const x = this.spawnXForChannel(this.lastObsX, 180);
     const img = IMG[c.img];
     const halfH = (img && img.width ? ohOf(img) : 200) * c.scale * 0.5;
-    const y = VIEW_H * 0.84 - halfH;
+    const y = groundYForObstacle() - halfH;
     this.obstacles.push({ cfg: c, kind: "bush", x, y });
     this.lastObsX = x;
   },
