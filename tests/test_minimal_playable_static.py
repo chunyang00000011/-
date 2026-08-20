@@ -174,8 +174,8 @@ class MinimalPlayableStaticTest(unittest.TestCase):
         player = read("scripts/player_bird.gd")
         spawner = read("scripts/spawner.gd")
 
-        self.assertIn("@export var climb_speed_mps: float = 64.0", player)
-        self.assertIn("@export var descend_speed_mps: float = 64.0", player)
+        self.assertIn("@export var climb_speed_mps: float = 84.0", player)
+        self.assertIn("@export var descend_speed_mps: float = 84.0", player)
         # 树木与灌木各自独立判定（每 3s），不再用单一 obstacle_interval。
         self.assertIn("const OBSTACLE_CHECK_INTERVAL: float = 3.0", spawner)
         self.assertIn("const BUSH_CHANCE: float = 0.15", spawner)
